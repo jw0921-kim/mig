@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>출석정보 마이그레이션 + 백업 + 롤백</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    label, select, input { margin: 5px 0; display: block; }
+    button { padding: 10px 20px; margin-top: 10px; margin-right: 10px; }
+    pre#log { background: #f4f4f4; padding: 10px; border: 1px solid #ccc; max-height: 400px; overflow-y: auto; }
+  </style>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js"></script>
+</head>
+<body>
+  <h2>출석정보 인덱스 삭제 + 자동 백업 + 롤백</h2>
+
+  <label>부서 선택:
+    <select id="dept">
+      <option value="겸손부">겸손부</option>
+      <option value="온유부">온유부</option>
+      <option value="사랑부">사랑부</option>
+      <option value="대학부">대학부</option>
+    </select>
+  </label>
+
+  <label>삭제할 인덱스: <input type="number" id="delIndex" min="0" /></label>
+
+  <label>형제/자매 선택:
+    <select id="gender">
+      <option value="형제">형제</option>
+      <option value="자매">자매</option>
+    </select>
+  </label>
+
+  <button onclick="startMigration()">🗑️ 마이그레이션 실행</button>
+  <button onclick="startRollback()">↩️ 롤백 실행</button>
+
+  <pre id="log">🔧 준비 완료...</pre>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyDrHDHrYO2Z8tWmWRgWYcN4nWHwALZ4c0s",
+      authDomain: "attendance-6b1b6.firebaseapp.com",
+      databaseURL: "https://attendance-6b1b6-default-rtdb.firebaseio.com",
+      projectId: "attendance-6b1b6",
+      storageBucket: "attendance-6b1b6.appspot.com",
+      messagingSenderId: "397263942125",
+      appId: "1:397263942125:web:92b813724b8b379f4d0a6e"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const log = (msg) => {
+      console.log(msg);
+      const el = document.getElementById("log");
+      el.textContent += "\n" + msg;
+      el.scrollTop = el.scrollHeight;
+    };
+
+    async function startMigration() {
+      const dept = document.getElementById("dept").value;
+      const delIndex = parseInt(document.getElementById("delIndex").value);
+      const gender = document.getElementById("gender").value;
+
+      if (isNaN(delIndex)) {
+        log("⚠️ 삭제할 인덱스를 숫자로 입력해주세요.");
+        return;
+      }
+
+      log(`🚀 마이그레이션 시작: 부서=${dept}, 성별=${gender}, 삭제할 인덱스=${delIndex}`);
+
+      try {
+        const snapshot = await db.ref(`attendance/${dept}`).get();
+        const data = snapshot.val();
+
+        if (!data) {
+          log("❌ 데이터를 불러올 수 없습니다.");
+          return;
+        }
+
+        let updatedCount = 0;
+
+        for (const date in data) {
+          const daily = data[date];
+          if (!daily || !daily[gender] || !(delIndex in daily[gender])) {
+            continue;
+          }
+
+          const original = daily[gender];
+          const backupRef = db.ref(`attendance/${dept}/백업/${date}/${gender}`);
+          await backupRef.set(original);
+          log(`💾 백업 완료: ${date}`);
+
+          const newData = {};
+          for (const key in original) {
+            const i = parseInt(key);
+            if (i < delIndex) {
+              newData[i] = original[key];
+            } else if (i > delIndex) {
+              newData[i - 1] = original[key];
+            }
+          }
+
+          await db.ref(`attendance/${dept}/${date}/${gender}`).set(newData);
+          log(`✅ 마이그레이션 완료: ${date}`);
+          updatedCount++;
+        }
+
+        log(`🎉 마이그레이션 총 처리 날짜: ${updatedCount}`);
+      } catch (err) {
+        log("🚨 오류: " + err.message);
+      }
+    }
+
+    async function startRollback() {
+      const dept = document.getElementById("dept").value;
+      const gender = document.getElementById("gender").value;
+
+      log(`↩️ 롤백 시작: 부서=${dept}, 성별=${gender}`);
+
+      try {
+        const snapshot = await db.ref(`attendance/${dept}/백업`).get();
+        const backupData = snapshot.val();
+
+        if (!backupData) {
+          log("❌ 백업 데이터가 존재하지 않습니다.");
+          return;
+        }
+
+        let restoredCount = 0;
+
+        for (const date in backupData) {
+          const genderData = backupData[date][gender];
+          if (!genderData) {
+            continue;
+          }
+
+          await db.ref(`attendance/${dept}/${date}/${gender}`).set(genderData);
+          log(`✅ 복원 완료: ${date}`);
+          restoredCount++;
+        }
+
+        log(`🎉 롤백 완료! 복원된 날짜 수: ${restoredCount}`);
+      } catch (err) {
+        log("🚨 롤백 중 오류 발생: " + err.message);
+      }
+    }
+  </script>
+</body>
+</html>
